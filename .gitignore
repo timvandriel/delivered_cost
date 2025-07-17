@@ -1,0 +1,17 @@
+# Ignore compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.~*
+
+# Ignore Qt Creator backup files
+*.autosave
+*.user
+
+# Ignore translations build artifacts
+*.qm
+
+# Ignore build artifacts
+build/
+dist/
+*.egg-info/

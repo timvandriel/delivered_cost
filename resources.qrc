@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/delivered_cost" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>
