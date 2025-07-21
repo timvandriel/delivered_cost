@@ -26,6 +26,10 @@ import os
 
 from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import pyqtSignal
+from qgis.core import QgsProject, QgsRasterLayer, Qgis, QgsMessageLog, QgsRectangle
+from qgis.utils import iface
+from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+from PyQt5.QtCore import QTimer
 
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "delivered_cost_dockwidget_base.ui")
@@ -45,6 +49,9 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # http://doc.qt.io/qt-5/designer-using-a-ui-file.html
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
+
+        # add OSM layer to extent
+        self.osm_layer = None
 
         # Connect sliders to spinboxes
         self.rtSkidderSpeedSlider.valueChanged.connect(
@@ -135,6 +142,41 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def update_slider_from_spinbox(self, spinbox, slider):
         slider.setValue(int(spinbox.value() * 10))
 
+    def add_osm_basemap(self):
+        if self.osm_layer is None:
+            layer_name = "OSM Standard"
+            url = "type=xyz&zmin=0&zmax=19&url=http://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            layer = QgsRasterLayer(url, layer_name, "wms")
+            if layer.isValid():
+                QgsProject.instance().addMapLayer(layer, addToLegend=False)
+                QgsProject.instance().layerTreeRoot().insertLayer(0, layer)
+                self.osm_layer = layer
+            else:
+                QMessageBox.critical(
+                    None,
+                    "Layer Load Error",
+                    f"Failed to load layer: {layer_name}. Please check the URL.",
+                )
+
+    def zoom_to_us_extent_3857(self):
+        # Approximate extent for continental U.S. in EPSG:3857 (Web Mercator)
+        extent_3857 = QgsRectangle(-14000000, 2800000, -7000000, 6300000)
+
+        # Set extent and refresh canvas
+        canvas = iface.mapCanvas()
+        canvas.setExtent(extent_3857)
+        canvas.refresh()
+
     def closeEvent(self, event):
+        if self.osm_layer:
+            QgsProject.instance().removeMapLayer(self.osm_layer)
+            self.osm_layer = None
         self.closingPlugin.emit()
         event.accept()
+
+    def showEvent(self, event):
+        """Override showEvent to add OSM layer when the dock widget is shown."""
+        if self.osm_layer is None:
+            self.add_osm_basemap()
+            QTimer.singleShot(100, self.zoom_to_us_extent_3857)
+        super(DeliveredCostDockWidget, self).showEvent(event)
