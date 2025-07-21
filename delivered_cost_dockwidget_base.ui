@@ -58,7 +58,7 @@
        <item row="1" column="1">
         <widget class="QCheckBox" name="pctCheckBox">
          <property name="text">
-          <string>PCT</string>
+          <string>PCL</string>
          </property>
         </widget>
        </item>
@@ -205,6 +205,9 @@
             </property>
             <property name="maximum">
              <double>5.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.100000000000000</double>
             </property>
            </widget>
           </item>

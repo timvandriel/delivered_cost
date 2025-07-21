@@ -75,7 +75,7 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 "layer_id": None,
             },
             self.pctCheckBox: {
-                "name": "PCT",
+                "name": "PCL",
                 "url": "url=https://apps.fs.usda.gov/fsgisx03/rest/services/wo_spf_fam/Potential_Control_Location/ImageServer",
                 "provider": "arcgismapserver",
                 "layer_id": None,
@@ -107,36 +107,53 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             )
         )
         self.rtSkidderMonSlider.valueChanged.connect(self.rtSkidderMonSpinBox.setValue)
-        self.rtSkidderMonSpinBox.valueChanged.connect(self.rtSkidderMonSlider.setValue)
+        self.rtSkidderMonSpinBox.valueChanged.connect(
+            lambda val: self.rtSkidderMonSlider.setValue(int(val))
+        )
+
         self.skylineMonSlider.valueChanged.connect(self.skylineMonSpinBox.setValue)
-        self.skylineMonSpinBox.valueChanged.connect(self.skylineMonSlider.setValue)
+        self.skylineMonSpinBox.valueChanged.connect(
+            lambda val: self.skylineMonSlider.setValue(int(val))
+        )
+
         self.fellerbuncherRateSlider.valueChanged.connect(
             self.fellerbunchRateSpinBox.setValue
         )
         self.fellerbunchRateSpinBox.valueChanged.connect(
-            self.fellerbuncherRateSlider.setValue
+            lambda val: self.fellerbuncherRateSlider.setValue(int(val))
         )
+
         self.handFellingSlider.valueChanged.connect(
             self.handfellingRateSpinBox.setValue
         )
         self.handfellingRateSpinBox.valueChanged.connect(
-            self.handFellingSlider.setValue
+            lambda val: self.handFellingSlider.setValue(int(val))
         )
+
         self.processingSlider.valueChanged.connect(self.processingSpinBox.setValue)
+        self.processingSpinBox.valueChanged.connect(
+            lambda val: self.processingSlider.setValue(int(val))
+        )
+
         self.haulingSlider.valueChanged.connect(self.haulingSpinBox.setValue)
-        self.haulingSpinBox.valueChanged.connect(self.haulingSlider.setValue)
+        self.haulingSpinBox.valueChanged.connect(
+            lambda val: self.haulingSlider.setValue(int(val))
+        )
+
         self.handTreatmentSlider.valueChanged.connect(
             self.handTreatmentSpinBox.setValue
         )
         self.handTreatmentSpinBox.valueChanged.connect(
-            self.handTreatmentSlider.setValue
+            lambda val: self.handTreatmentSlider.setValue(int(val))
         )
+
         self.prescribedFireSlider.valueChanged.connect(
             self.prescribedFireSpinBox.setValue
         )
         self.prescribedFireSpinBox.valueChanged.connect(
-            self.prescribedFireSlider.setValue
+            lambda val: self.prescribedFireSlider.setValue(int(val))
         )
+
         self.rtSkidderPayloadSlider.valueChanged.connect(
             lambda value: self.update_spinbox_from_slider(
                 self.rtSkidderPayloadSlider, self.rtSkidderPayloadSpinBox
@@ -242,6 +259,17 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if layer:
                 QgsProject.instance().removeMapLayer(layer)
             self.osm_layer_id = None
+        for config in self.layer_configs.values():
+            layer_id = config.get("layer_id")
+            if layer_id:
+                layer = QgsProject.instance().mapLayer(layer_id)
+                if layer:
+                    QgsProject.instance().removeMapLayer(layer)
+                    iface.mapCanvas().refresh()
+                config["layer_id"] = None
+            # Uncheck all checkboxes
+        for checkbox in self.layer_configs.keys():
+            checkbox.setChecked(False)
         self.closingPlugin.emit()
         event.accept()
 
