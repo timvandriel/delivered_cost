@@ -57,6 +57,77 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.rtSpdSpinBox, self.rtSkidderSpeedSlider
             )
         )
+        self.skylineSpeedSlider.valueChanged.connect(
+            lambda value: self.update_spinbox_from_slider(
+                self.skylineSpeedSlider, self.skylineSpdSpinBox
+            )
+        )
+        self.skylineSpdSpinBox.valueChanged.connect(
+            lambda value: self.update_slider_from_spinbox(
+                self.skylineSpdSpinBox, self.skylineSpeedSlider
+            )
+        )
+        self.rtSkidderMonSlider.valueChanged.connect(self.rtSkidderMonSpinBox.setValue)
+        self.rtSkidderMonSpinBox.valueChanged.connect(self.rtSkidderMonSlider.setValue)
+        self.skylineMonSlider.valueChanged.connect(self.skylineMonSpinBox.setValue)
+        self.skylineMonSpinBox.valueChanged.connect(self.skylineMonSlider.setValue)
+        self.fellerbuncherRateSlider.valueChanged.connect(
+            self.fellerbunchRateSpinBox.setValue
+        )
+        self.fellerbunchRateSpinBox.valueChanged.connect(
+            self.fellerbuncherRateSlider.setValue
+        )
+        self.handFellingSlider.valueChanged.connect(
+            self.handfellingRateSpinBox.setValue
+        )
+        self.handfellingRateSpinBox.valueChanged.connect(
+            self.handFellingSlider.setValue
+        )
+        self.processingSlider.valueChanged.connect(self.processingSpinBox.setValue)
+        self.haulingSlider.valueChanged.connect(self.haulingSpinBox.setValue)
+        self.haulingSpinBox.valueChanged.connect(self.haulingSlider.setValue)
+        self.handTreatmentSlider.valueChanged.connect(
+            self.handTreatmentSpinBox.setValue
+        )
+        self.handTreatmentSpinBox.valueChanged.connect(
+            self.handTreatmentSlider.setValue
+        )
+        self.prescribedFireSlider.valueChanged.connect(
+            self.prescribedFireSpinBox.setValue
+        )
+        self.prescribedFireSpinBox.valueChanged.connect(
+            self.prescribedFireSlider.setValue
+        )
+        self.rtSkidderPayloadSlider.valueChanged.connect(
+            lambda value: self.update_spinbox_from_slider(
+                self.rtSkidderPayloadSlider, self.rtSkidderPayloadSpinBox
+            )
+        )
+        self.rtSkidderPayloadSpinBox.valueChanged.connect(
+            lambda value: self.update_slider_from_spinbox(
+                self.rtSkidderPayloadSpinBox, self.rtSkidderPayloadSlider
+            )
+        )
+        self.skylinePayloadSlider.valueChanged.connect(
+            lambda value: self.update_spinbox_from_slider(
+                self.skylinePayloadSlider, self.skylinePayloadSpinBox
+            )
+        )
+        self.skylinePayloadSpinBox.valueChanged.connect(
+            lambda value: self.update_slider_from_spinbox(
+                self.skylinePayloadSpinBox, self.skylinePayloadSlider
+            )
+        )
+        self.logTruckPayloadSlider.valueChanged.connect(
+            lambda value: self.update_spinbox_from_slider(
+                self.logTruckPayloadSlider, self.logTruckPayloadSpinBox
+            )
+        )
+        self.logTruckPayloadSpinBox.valueChanged.connect(
+            lambda value: self.update_slider_from_spinbox(
+                self.logTruckPayloadSpinBox, self.logTruckPayloadSlider
+            )
+        )
 
     def update_spinbox_from_slider(self, slider, spinbox):
         spinbox.setValue(slider.value() / 10.0)
