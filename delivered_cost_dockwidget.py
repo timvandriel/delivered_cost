@@ -28,7 +28,7 @@ from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import pyqtSignal
 from qgis.core import QgsProject, QgsRasterLayer, Qgis, QgsMessageLog, QgsRectangle
 from qgis.utils import iface
-from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
 from PyQt5.QtCore import QTimer
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -50,8 +50,40 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
 
-        # add OSM layer to extent
-        self.osm_layer = None
+        # Manage the OSM layer
+        self.osm_layer_id = None
+        QgsProject.instance().layerWillBeRemoved.connect(self.on_layer_removed)
+
+        # Background layers
+        self.layer_configs = {
+            self.esriCheckBox: {
+                "name": "ESRI World Imagery",
+                "url": "type=xyz&zmin=0&zmax=19&url=https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+                "provider": "wms",
+                "layer_id": None,
+            },
+            self.burnProbCheckBox: {
+                "name": "Burn Probability",
+                "url": "url=https://apps.fs.usda.gov/fsgisx03/rest/services/wo_spf_fam/Nat_BurnProbability/ImageServer",
+                "provider": "arcgismapserver",
+                "layer_id": None,
+            },
+            self.evtCheckBox: {
+                "name": "EVT",
+                "url": "url=https://lfps.usgs.gov/arcgis/rest/services/Landfire_LF230/US_230EVT/ImageServer",
+                "provider": "arcgismapserver",
+                "layer_id": None,
+            },
+            self.pctCheckBox: {
+                "name": "PCT",
+                "url": "url=https://apps.fs.usda.gov/fsgisx03/rest/services/wo_spf_fam/Potential_Control_Location/ImageServer",
+                "provider": "arcgismapserver",
+                "layer_id": None,
+            },
+        }
+
+        for checkbox in self.layer_configs.keys():
+            checkbox.toggled.connect(self.on_layer_checkbox_toggled)
 
         # Connect sliders to spinboxes
         self.rtSkidderSpeedSlider.valueChanged.connect(
@@ -143,20 +175,26 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         slider.setValue(int(spinbox.value() * 10))
 
     def add_osm_basemap(self):
-        if self.osm_layer is None:
+        if getattr(self, "osm_layer_id", None) is None:
             layer_name = "OSM Standard"
             url = "type=xyz&zmin=0&zmax=19&url=http://tile.openstreetmap.org/{z}/{x}/{y}.png"
             layer = QgsRasterLayer(url, layer_name, "wms")
             if layer.isValid():
                 QgsProject.instance().addMapLayer(layer, addToLegend=False)
                 QgsProject.instance().layerTreeRoot().insertLayer(0, layer)
-                self.osm_layer = layer
+                self.osm_layer_id = (
+                    layer.id()
+                )  # Store only the layer ID, not the layer object
             else:
                 QMessageBox.critical(
                     None,
                     "Layer Load Error",
                     f"Failed to load layer: {layer_name}. Please check the URL.",
                 )
+
+    def on_layer_removed(self, layer_id):
+        if getattr(self, "osm_layer_id", None) == layer_id:
+            self.osm_layer_id = None
 
     def zoom_to_us_extent_3857(self):
         # Approximate extent for continental U.S. in EPSG:3857 (Web Mercator)
@@ -167,16 +205,49 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         canvas.setExtent(extent_3857)
         canvas.refresh()
 
+    def on_layer_checkbox_toggled(self, checked):
+        checkbox = self.sender()  # Which checkbox sent this signal?
+        config = self.layer_configs.get(checkbox)
+        if config is None:
+            return
+
+        if checked:
+            # Add layer if not already added
+            if not config["layer_id"]:
+                layer = QgsRasterLayer(
+                    config["url"], config["name"], config["provider"]
+                )
+                if layer.isValid():
+                    QgsProject.instance().addMapLayer(layer)
+                    config["layer_id"] = layer.id()
+                else:
+                    QMessageBox.critical(
+                        None,
+                        "Layer Load Error",
+                        f"Failed to load layer: {config['name']}",
+                    )
+        else:
+            # Remove layer if exists
+            layer_id = config.get("layer_id")
+            if layer_id:
+                layer = QgsProject.instance().mapLayer(layer_id)
+                if layer:
+                    QgsProject.instance().removeMapLayer(layer)
+                    iface.mapCanvas().refresh()
+                config["layer_id"] = None
+
     def closeEvent(self, event):
-        if self.osm_layer:
-            QgsProject.instance().removeMapLayer(self.osm_layer)
-            self.osm_layer = None
+        if hasattr(self, "osm_layer_id") and self.osm_layer_id:
+            layer = QgsProject.instance().mapLayer(self.osm_layer_id)
+            if layer:
+                QgsProject.instance().removeMapLayer(layer)
+            self.osm_layer_id = None
         self.closingPlugin.emit()
         event.accept()
 
     def showEvent(self, event):
         """Override showEvent to add OSM layer when the dock widget is shown."""
-        if self.osm_layer is None:
+        if getattr(self, "osm_layer_id", None) is None:
             self.add_osm_basemap()
             QTimer.singleShot(100, self.zoom_to_us_extent_3857)
         super(DeliveredCostDockWidget, self).showEvent(event)
