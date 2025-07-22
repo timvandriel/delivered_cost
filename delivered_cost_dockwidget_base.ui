@@ -849,7 +849,7 @@
            </widget>
           </item>
           <item row="2" column="2" rowspan="2">
-           <widget class="QPushButton" name="pushButton_3">
+           <widget class="QPushButton" name="pickPointButton">
             <property name="maximumSize">
              <size>
               <width>85</width>
@@ -869,7 +869,7 @@
            </widget>
           </item>
           <item row="0" column="2">
-           <widget class="QPushButton" name="pushButton_2">
+           <widget class="QPushButton" name="drawPolygonButton">
             <property name="maximumSize">
              <size>
               <width>85</width>

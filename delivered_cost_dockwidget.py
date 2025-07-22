@@ -26,10 +26,22 @@ import os
 
 from qgis.PyQt import QtGui, QtWidgets, uic
 from qgis.PyQt.QtCore import pyqtSignal
-from qgis.core import QgsProject, QgsRasterLayer, Qgis, QgsMessageLog, QgsRectangle
+from qgis.core import (
+    QgsProject,
+    QgsRasterLayer,
+    Qgis,
+    QgsMessageLog,
+    QgsRectangle,
+    QgsVectorLayer,
+    QgsFeature,
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
+    QgsGeometry,
+)
 from qgis.utils import iface
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
 from PyQt5.QtCore import QTimer
+from .draw_polygon_tool import DrawPolygonTool
 
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "delivered_cost_dockwidget_base.ui")
@@ -184,6 +196,10 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.logTruckPayloadSpinBox, self.logTruckPayloadSlider
             )
         )
+        # Initialize the draw polygon tool
+        self.drawTool = DrawPolygonTool(iface.mapCanvas())
+        self.drawTool.polygonCompleted.connect(self.handle_polygon_completed)
+        self.drawPolygonButton.clicked.connect(self.activate_draw_tool)
 
     def update_spinbox_from_slider(self, slider, spinbox):
         spinbox.setValue(slider.value() / 10.0)
@@ -252,6 +268,39 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     QgsProject.instance().removeMapLayer(layer)
                     iface.mapCanvas().refresh()
                 config["layer_id"] = None
+
+    def activate_draw_tool(self):
+        iface.mapCanvas().setMapTool(self.drawTool)
+
+    def handle_polygon_completed(self, geom):
+        project_crs = QgsProject.instance().crs()
+        geom = QgsGeometry(geom)
+
+        # Store geometry for later use
+        self.aoi_geometry = geom
+
+        # If AOI layer exists, clear features
+        if hasattr(self, "aoi_layer") and self.aoi_layer:
+            pr = self.aoi_layer.dataProvider()
+            pr.deleteFeatures([f.id() for f in self.aoi_layer.getFeatures()])
+        else:
+            # Create the layer if it doesn't exist
+            self.aoi_layer = QgsVectorLayer(
+                f"Polygon?crs={project_crs.authid()}", "AOI", "memory"
+            )
+            QgsProject.instance().addMapLayer(self.aoi_layer)
+            pr = self.aoi_layer.dataProvider()
+
+        # Add new feature
+        feat = QgsFeature()
+        feat.setGeometry(geom)
+        pr.addFeatures([feat])
+        self.aoi_layer.updateExtents()
+        # Force redraw
+        self.aoi_layer.triggerRepaint()
+        iface.mapCanvas().refresh()
+
+        iface.actionPan().trigger()
 
     def closeEvent(self, event):
         if hasattr(self, "osm_layer_id") and self.osm_layer_id:
