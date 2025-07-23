@@ -37,11 +37,14 @@ from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsGeometry,
+    QgsPointXY,
 )
+from qgis.gui import QgsMapToolPan, QgsVertexMarker
 from qgis.utils import iface
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from .draw_polygon_tool import DrawPolygonTool
+from .pick_point_tool import PickPointTool
 
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "delivered_cost_dockwidget_base.ui")
@@ -201,6 +204,12 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.drawTool.polygonCompleted.connect(self.handle_polygon_completed)
         self.drawPolygonButton.clicked.connect(self.activate_draw_tool)
 
+        # Initialize pick point tool
+        self.pointTool = PickPointTool(iface.mapCanvas())
+        self.pointTool.pointPicked.connect(self.handle_point_picked)
+        self.pickPointButton.clicked.connect(self.activate_point_picker)
+        self.facility_marker = None
+
     def update_spinbox_from_slider(self, slider, spinbox):
         spinbox.setValue(slider.value() / 10.0)
 
@@ -270,37 +279,70 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 config["layer_id"] = None
 
     def activate_draw_tool(self):
+        # If AOI layer already exists, remove it from project
+        if hasattr(self, "aoi_layer_id") and self.aoi_layer_id:
+            layer = QgsProject.instance().mapLayer(self.aoi_layer_id)
+            if layer:
+                QgsProject.instance().removeMapLayer(layer)
+            self.aoi_layer_id = None
+            iface.mapCanvas().refresh()
+
+        # Set up and activate the drawing tool
         iface.mapCanvas().setMapTool(self.drawTool)
+
+        # Show instructions
+        iface.messageBar().pushMessage(
+            "Instructions for drawing a polygon",
+            "Click to add points, right-click to finish the polygon. AOI will be removed if button is clicked again.",
+            level=Qgis.Info,
+            duration=25,
+        )
 
     def handle_polygon_completed(self, geom):
         project_crs = QgsProject.instance().crs()
         geom = QgsGeometry(geom)
-
-        # Store geometry for later use
         self.aoi_geometry = geom
 
-        # If AOI layer exists, clear features
-        if hasattr(self, "aoi_layer") and self.aoi_layer:
-            pr = self.aoi_layer.dataProvider()
-            pr.deleteFeatures([f.id() for f in self.aoi_layer.getFeatures()])
-        else:
-            # Create the layer if it doesn't exist
-            self.aoi_layer = QgsVectorLayer(
-                f"Polygon?crs={project_crs.authid()}", "AOI", "memory"
-            )
-            QgsProject.instance().addMapLayer(self.aoi_layer)
-            pr = self.aoi_layer.dataProvider()
+        # Create the layer
+        aoi_layer = QgsVectorLayer(
+            f"Polygon?crs={project_crs.authid()}", "AOI", "memory"
+        )
+        QgsProject.instance().addMapLayer(aoi_layer)
+        self.aoi_layer_id = aoi_layer.id()  # Store only the ID
 
-        # Add new feature
+        pr = aoi_layer.dataProvider()
         feat = QgsFeature()
         feat.setGeometry(geom)
         pr.addFeatures([feat])
-        self.aoi_layer.updateExtents()
-        # Force redraw
-        self.aoi_layer.triggerRepaint()
+        aoi_layer.updateExtents()
+        aoi_layer.triggerRepaint()
         iface.mapCanvas().refresh()
 
         iface.actionPan().trigger()
+
+    def activate_point_picker(self):
+        if self.facility_marker:
+            iface.mapCanvas().scene().removeItem(self.facility_marker)
+            del self.facility_marker
+            self.facility_marker = None
+        iface.mapCanvas().setMapTool(self.pointTool)
+        iface.messageBar().pushMessage(
+            "Instructions for picking a point",
+            "Click on the map to pick a point. The point will be marked with a red cross. Press button again to pick a new point.",
+            level=Qgis.Info,
+            duration=25,
+        )
+
+    def handle_point_picked(self, point):
+        self.facility_marker = QgsVertexMarker(iface.mapCanvas())
+        self.facility_marker.setCenter(point)
+        self.facility_marker.setColor(Qt.red)
+        self.facility_marker.setIconType(QgsVertexMarker.ICON_CROSS)
+        self.facility_marker.setPenWidth(2)
+        self.facility_marker.setScale(1)
+
+        self.facility_coords = (point.x(), point.y())
+        iface.actionPan().trigger()  # Switch back to pan tool after picking point
 
     def closeEvent(self, event):
         if hasattr(self, "osm_layer_id") and self.osm_layer_id:
@@ -308,6 +350,23 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if layer:
                 QgsProject.instance().removeMapLayer(layer)
             self.osm_layer_id = None
+        if hasattr(self, "aoi_layer_id") and self.aoi_layer_id:
+            layer = QgsProject.instance().mapLayer(self.aoi_layer_id)
+            if layer:
+                QgsProject.instance().removeMapLayer(layer)
+            self.aoi_layer_id = None
+
+        if hasattr(self, "draw_polygon_tool") and self.draw_polygon_tool:
+            self.draw_polygon_tool.deactivate()
+
+        if self.facility_marker:
+            iface.mapCanvas().scene().removeItem(self.facility_marker)
+            del self.facility_marker
+            self.facility_marker = None
+
+        # Switch back to pan tool explicitly
+        pan_tool = QgsMapToolPan(iface.mapCanvas())
+        iface.mapCanvas().setMapTool(pan_tool)
         for config in self.layer_configs.values():
             layer_id = config.get("layer_id")
             if layer_id:
