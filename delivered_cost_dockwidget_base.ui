@@ -902,43 +902,49 @@
           <property name="bottomMargin">
            <number>0</number>
           </property>
+          <property name="horizontalSpacing">
+           <number>0</number>
+          </property>
+          <property name="verticalSpacing">
+           <number>-1</number>
+          </property>
           <item row="0" column="0">
-           <widget class="QLabel" name="userRoadsLabel">
+           <widget class="QPushButton" name="userRoadsButton">
+            <property name="maximumSize">
+             <size>
+              <width>145</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="text">
-             <string>User Specified Roads</string>
+             <string>Select Roads Shapefile</string>
             </property>
            </widget>
           </item>
           <item row="0" column="1">
-           <widget class="QPushButton" name="userRoadsButton">
-            <property name="maximumSize">
-             <size>
-              <width>63</width>
-              <height>16777215</height>
-             </size>
-            </property>
+           <widget class="QLineEdit" name="userRoadsLineEdit">
             <property name="text">
-             <string>Select</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QPushButton" name="userBarriersButton">
-            <property name="maximumSize">
-             <size>
-              <width>63</width>
-              <height>16777215</height>
-             </size>
-            </property>
-            <property name="text">
-             <string>Select</string>
+             <string>(Optional)</string>
             </property>
            </widget>
           </item>
           <item row="1" column="0">
-           <widget class="QLabel" name="userBarriersLabel">
+           <widget class="QPushButton" name="userBarriersButton">
+            <property name="maximumSize">
+             <size>
+              <width>145</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="text">
-             <string>User Specified Barriers</string>
+             <string>Select Barriers Shapefile</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="userBarriersLineEdit">
+            <property name="text">
+             <string>(Optional)</string>
             </property>
            </widget>
           </item>
@@ -974,7 +980,7 @@
            </widget>
           </item>
           <item>
-           <widget class="QPushButton" name="pushButton">
+           <widget class="QPushButton" name="runButton">
             <property name="maximumSize">
              <size>
               <width>63</width>
@@ -1022,6 +1028,9 @@
        </item>
        <item row="0" column="1">
         <widget class="QProgressBar" name="progressBar">
+         <property name="maximum">
+          <number>12</number>
+         </property>
          <property name="value">
           <number>0</number>
          </property>

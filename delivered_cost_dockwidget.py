@@ -45,6 +45,10 @@ from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
 from PyQt5.QtCore import QTimer, Qt
 from .draw_polygon_tool import DrawPolygonTool
 from .pick_point_tool import PickPointTool
+from qgis.core import QgsCoordinateTransform, QgsProject, QgsPointXY, QgsGeometry
+from shapely.geometry import shape, Point, Polygon
+from .delvCost import run
+import traceback
 
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "delivered_cost_dockwidget_base.ui")
@@ -65,6 +69,7 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
 
+        self.plainTextEdit.setReadOnly(True)
         # Manage the OSM layer
         self.osm_layer_id = None
         QgsProject.instance().layerWillBeRemoved.connect(self.on_layer_removed)
@@ -203,12 +208,20 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.drawTool = DrawPolygonTool(iface.mapCanvas())
         self.drawTool.polygonCompleted.connect(self.handle_polygon_completed)
         self.drawPolygonButton.clicked.connect(self.activate_draw_tool)
+        self.facility_coords = None
 
         # Initialize pick point tool
         self.pointTool = PickPointTool(iface.mapCanvas())
         self.pointTool.pointPicked.connect(self.handle_point_picked)
         self.pickPointButton.clicked.connect(self.activate_point_picker)
         self.facility_marker = None
+
+        # Connect shapefile selection buttons
+        self.userRoadsButton.clicked.connect(self.select_roads_shapefile)
+        self.userBarriersButton.clicked.connect(self.select_barriers_shapefile)
+
+        # Connect run button
+        self.runButton.clicked.connect(self.run_delivered_cost)
 
     def update_spinbox_from_slider(self, slider, spinbox):
         spinbox.setValue(slider.value() / 10.0)
@@ -341,8 +354,102 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.facility_marker.setPenWidth(2)
         self.facility_marker.setScale(1)
 
-        self.facility_coords = (point.x(), point.y())
+        self.facility_coords = point
         iface.actionPan().trigger()  # Switch back to pan tool after picking point
+
+    def select_roads_shapefile(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Select User Specified Roads Shapefile", "", "Shapefiles (*.shp)"
+        )
+        if filename:
+            self.userRoadsLineEdit.setText(filename)
+            self.lyr_roads_path = filename
+
+    def select_barriers_shapefile(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Select User Specified Barriers Shapefile", "", "Shapefiles (*.shp)"
+        )
+        if filename:
+            self.userBarriersLineEdit.setText(filename)
+            self.lyr_barriers_path = filename
+
+    def log_to_textbox(self, message):
+        self.plainTextEdit.appendPlainText(str(message))
+
+    def run_delivered_cost(self):
+        if self.facility_coords is None:
+            QMessageBox.warning(
+                self,
+                "No Facility Point",
+                "Please pick a facility point before running the analysis.",
+            )
+            return
+        elif not hasattr(self, "aoi_geometry") or self.aoi_geometry is None:
+            QMessageBox.warning(
+                self,
+                "No AOI Polygon",
+                "Please draw an area of interest polygon before running the analysis.",
+            )
+            return
+        study_area_coords = qgs_to_coords_list_epsg4326(self.aoi_geometry)
+
+        saw_coords = qgs_to_coords_list_epsg4326(self.facility_coords)
+        print("Study Area Coordinates:", study_area_coords)
+        print("Saw Coordinates:", saw_coords)
+        tr_s = self.rtSpdSpinBox.value()
+        cb_s = self.skylineSpdSpinBox.value()
+
+        tr_d = self.rtSkidderMonSpinBox.value()
+        cb_d = self.skylineMonSpinBox.value()
+        fb_d = self.fellerbunchRateSpinBox.value()
+        hf_d = self.handfellingRateSpinBox.value()
+        pr_d = self.processingSpinBox.value()
+        ha_d = self.haulingSpinBox.value()
+        ht_d = self.handTreatmentSpinBox.value()
+        pf_d = self.prescribedFireSpinBox.value()
+
+        tr_p = self.rtSkidderPayloadSpinBox.value()
+        cb_p = self.skylinePayloadSpinBox.value()
+        lt_p = self.logTruckPayloadSpinBox.value()
+
+        cb_o = self.optionalSurfacesCheckBox.isChecked()
+
+        if self.userRoadsLineEdit.text() == "(Optional)":
+            self.lyr_roads_path = None
+        if self.userBarriersLineEdit.text() == "(Optional)":
+            self.lyr_barriers_path = None
+
+        self.runButton.setEnabled(False)
+        try:
+            result = run(
+                study_area_coords=study_area_coords,
+                saw_coords=saw_coords,
+                lyr_roads_path=self.lyr_roads_path,
+                lyr_barriers_path=self.lyr_barriers_path,
+                sk_r=tr_s,
+                cb_r=cb_s,
+                sk_d=tr_d,
+                cb_d=cb_d,
+                fb_d=fb_d,
+                hf_d=hf_d,
+                pr_d=pr_d,
+                lt_d=ha_d,
+                ht_d=ht_d,
+                pf_d=pf_d,
+                sk_p=tr_p,
+                cb_p=cb_p,
+                lt_p=lt_p,
+                cb_o=cb_o,
+                pbar=self.progressBar,
+                log=self.log_to_textbox,
+            )
+            print("Delivered Cost Analysis Result:", result)
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                "Delivered Cost Plugin Error:\n" + traceback.format_exc(),
+                "DeliveredCost",  # your plugin name or tag
+                level=Qgis.Critical,
+            )
 
     def closeEvent(self, event):
         if hasattr(self, "osm_layer_id") and self.osm_layer_id:
@@ -375,9 +482,12 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                     QgsProject.instance().removeMapLayer(layer)
                     iface.mapCanvas().refresh()
                 config["layer_id"] = None
-            # Uncheck all checkboxes
+        # Uncheck all checkboxes
         for checkbox in self.layer_configs.keys():
             checkbox.setChecked(False)
+
+        self.userRoadsLineEdit.setText("(Optional)")
+        self.userBarriersLineEdit.setText("(Optional)")
         self.closingPlugin.emit()
         event.accept()
 
@@ -387,3 +497,50 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.add_osm_basemap()
             QTimer.singleShot(100, self.zoom_to_us_extent_3857)
         super(DeliveredCostDockWidget, self).showEvent(event)
+
+
+def qgs_to_coords_list_epsg4326(geom):
+    """
+    Convert a QgsGeometry or QgsPointXY from project CRS to EPSG:4326 and
+    return a list of coordinates.
+
+    For a Point geometry, returns [(lon, lat)].
+    For a Polygon geometry, returns a list of (lon, lat) tuples for the exterior ring.
+
+    Parameters:
+        geom: QgsGeometry or QgsPointXY
+
+    Returns:
+        list of (lon, lat) tuples
+    """
+    # Get source CRS (usually project CRS)
+    src_crs = QgsProject.instance().crs()
+    dest_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+
+    # Setup coordinate transformer
+    transform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
+
+    # If input is QgsPointXY, convert to QgsGeometry first
+    if isinstance(geom, QgsPointXY):
+        geom = QgsGeometry.fromPointXY(geom)
+
+    # Transform geometry to EPSG:4326
+    geom.transform(transform)
+
+    # Convert to shapely geometry via GeoJSON dict
+    import json
+    from shapely.geometry import shape, Point, Polygon
+
+    geojson_dict = json.loads(geom.asJson())
+    shapely_geom = shape(geojson_dict)
+
+    # Extract coordinates depending on geometry type
+    if isinstance(shapely_geom, Point):
+        # Return list with one coordinate tuple
+        return [(shapely_geom.x, shapely_geom.y)]
+    elif isinstance(shapely_geom, Polygon):
+        # Return list of coords of exterior ring only
+        return list(shapely_geom.exterior.coords)
+    else:
+        # For other geometry types you might want to handle differently
+        raise ValueError(f"Unsupported geometry type: {type(shapely_geom)}")

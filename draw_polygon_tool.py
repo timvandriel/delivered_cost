@@ -1,7 +1,7 @@
 # yourplugin/draw_polygon_tool.py
 from qgis.gui import QgsMapTool, QgsRubberBand
 from qgis.core import QgsPointXY, QgsGeometry, QgsWkbTypes
-from PyQt5.QtCore import pyqtSignal, Qt
+from qgis.PyQt.QtCore import pyqtSignal, Qt
 
 
 class DrawPolygonTool(QgsMapTool):
