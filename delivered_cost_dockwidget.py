@@ -42,13 +42,11 @@ from qgis.core import (
 from qgis.gui import QgsMapToolPan, QgsVertexMarker
 from qgis.utils import iface
 from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QThreadPool
 from .draw_polygon_tool import DrawPolygonTool
 from .pick_point_tool import PickPointTool
 from qgis.core import QgsCoordinateTransform, QgsProject, QgsPointXY, QgsGeometry
-from shapely.geometry import shape, Point, Polygon
-from .delvCost import run
-import traceback
+
 
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "delivered_cost_dockwidget_base.ui")
@@ -68,11 +66,12 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         # http://doc.qt.io/qt-5/designer-using-a-ui-file.html
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
-
+        self.threadpool = QThreadPool.globalInstance()
         self.plainTextEdit.setReadOnly(True)
         # Manage the OSM layer
         self.osm_layer_id = None
         QgsProject.instance().layerWillBeRemoved.connect(self.on_layer_removed)
+        iface.actionPan().trigger()
 
         # Background layers
         self.layer_configs = {
@@ -240,6 +239,8 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.osm_layer_id = (
                     layer.id()
                 )  # Store only the layer ID, not the layer object
+                crs = QgsCoordinateReferenceSystem("EPSG:4326")
+                QgsProject.instance().setCrs(crs)
             else:
                 QMessageBox.critical(
                     None,
@@ -376,7 +377,46 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def log_to_textbox(self, message):
         self.plainTextEdit.appendPlainText(str(message))
 
+    def handle_results(self, result_dict):
+        import shutil
+        from pathlib import Path
+
+        self.log_to_textbox("Delivered Cost Analysis completed successfully.")
+        self.runButton.setEnabled(True)
+
+        out_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Select directory to save output rasters",
+            "",
+            QFileDialog.ShowDirsOnly,
+        )
+        if not out_dir:
+            self.log_to_textbox(
+                "Save directory selection cancelled. Results not saved."
+            )
+            return
+
+        source_dir = str(Path.home())
+        print(f"Source directory: {source_dir}")
+        for key, filename in result_dict.items():
+            src_path = os.path.join(source_dir, filename)
+            dest_path = os.path.join(out_dir, filename)
+            if os.path.exists(src_path):
+                try:
+                    shutil.move(src_path, dest_path)
+                    self.log_to_textbox(f"Moved {filename} to {out_dir}")
+                except Exception as e:
+                    self.log_to_textbox(
+                        f"Error moving {filename} to {out_dir}: {str(e)}"
+                    )
+
+    def show_error(self, error_message):
+        self.log_to_textbox(f"Error: {error_message}")
+        QMessageBox.critical(self, "Error", error_message)
+        self.runButton.setEnabled(True)
+
     def run_delivered_cost(self):
+        self.plainTextEdit.clear()
         if self.facility_coords is None:
             QMessageBox.warning(
                 self,
@@ -391,11 +431,10 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 "Please draw an area of interest polygon before running the analysis.",
             )
             return
+
         study_area_coords = qgs_to_coords_list_epsg4326(self.aoi_geometry)
 
         saw_coords = qgs_to_coords_list_epsg4326(self.facility_coords)
-        print("Study Area Coordinates:", study_area_coords)
-        print("Saw Coordinates:", saw_coords)
         tr_s = self.rtSpdSpinBox.value()
         cb_s = self.skylineSpdSpinBox.value()
 
@@ -418,38 +457,41 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             self.lyr_roads_path = None
         if self.userBarriersLineEdit.text() == "(Optional)":
             self.lyr_barriers_path = None
-
+        args = {
+            "study_area_coords": study_area_coords,
+            "saw_coords": saw_coords,
+            "lyr_roads_path": self.lyr_roads_path,
+            "lyr_barriers_path": self.lyr_barriers_path,
+            "sk_r": tr_s,
+            "cb_r": cb_s,
+            "sk_d": tr_d,
+            "cb_d": cb_d,
+            "fb_d": fb_d,
+            "hf_d": hf_d,
+            "pr_d": pr_d,
+            "lt_d": ha_d,
+            "ht_d": ht_d,
+            "pf_d": pf_d,
+            "sk_p": tr_p,
+            "cb_p": cb_p,
+            "lt_p": lt_p,
+            "cb_o": cb_o,
+        }
         self.runButton.setEnabled(False)
+        self.log_to_textbox("Starting Delivered Cost Analysis...")
         try:
-            result = run(
-                study_area_coords=study_area_coords,
-                saw_coords=saw_coords,
-                lyr_roads_path=self.lyr_roads_path,
-                lyr_barriers_path=self.lyr_barriers_path,
-                sk_r=tr_s,
-                cb_r=cb_s,
-                sk_d=tr_d,
-                cb_d=cb_d,
-                fb_d=fb_d,
-                hf_d=hf_d,
-                pr_d=pr_d,
-                lt_d=ha_d,
-                ht_d=ht_d,
-                pf_d=pf_d,
-                sk_p=tr_p,
-                cb_p=cb_p,
-                lt_p=lt_p,
-                cb_o=cb_o,
-                pbar=self.progressBar,
-                log=self.log_to_textbox,
-            )
-            print("Delivered Cost Analysis Result:", result)
+            from .workers import DeliveredCostWorker
+
+            worker = DeliveredCostWorker(args)
+            worker.signals.log.connect(self.log_to_textbox)
+            worker.signals.progress.connect(self.progressBar.setValue)
+            worker.signals.finished.connect(self.handle_results)
+            worker.signals.error.connect(self.show_error)
+            self.threadpool.start(worker)
         except Exception as e:
-            QgsMessageLog.logMessage(
-                "Delivered Cost Plugin Error:\n" + traceback.format_exc(),
-                "DeliveredCost",  # your plugin name or tag
-                level=Qgis.Critical,
-            )
+            self.log_to_textbox(f"Error initializing worker: {str(e)}")
+            self.runButton.setEnabled(True)
+            return
 
     def closeEvent(self, event):
         if hasattr(self, "osm_layer_id") and self.osm_layer_id:

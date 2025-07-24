@@ -190,6 +190,7 @@ def _run(
         pbar.setValue(pbar.value() + 1)
     if lyr_roads_path is None:
         rds = get_osm_data(ply, osm_rds, out_crs=s_area.crs).reset_index()
+        print(rds.columns)
     else:
         rds = open_vectors(lyr_roads_path).data.compute()
 
