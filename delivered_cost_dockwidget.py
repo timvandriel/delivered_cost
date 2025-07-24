@@ -239,8 +239,6 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 self.osm_layer_id = (
                     layer.id()
                 )  # Store only the layer ID, not the layer object
-                crs = QgsCoordinateReferenceSystem("EPSG:4326")
-                QgsProject.instance().setCrs(crs)
             else:
                 QMessageBox.critical(
                     None,
@@ -353,7 +351,7 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.facility_marker.setColor(Qt.red)
         self.facility_marker.setIconType(QgsVertexMarker.ICON_CROSS)
         self.facility_marker.setPenWidth(2)
-        self.facility_marker.setScale(1)
+        self.facility_marker.setScale(2)
 
         self.facility_coords = point
         iface.actionPan().trigger()  # Switch back to pan tool after picking point
@@ -398,17 +396,36 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         source_dir = str(Path.home())
         print(f"Source directory: {source_dir}")
-        for key, filename in result_dict.items():
-            src_path = os.path.join(source_dir, filename)
-            dest_path = os.path.join(out_dir, filename)
-            if os.path.exists(src_path):
-                try:
+        try:
+            for key, filename in result_dict.items():
+                src_path = os.path.join(source_dir, filename)
+                dest_path = os.path.join(out_dir, filename)
+                if os.path.exists(src_path):
                     shutil.move(src_path, dest_path)
+                    result_dict[key] = dest_path  # Update path in result_dict
                     self.log_to_textbox(f"Moved {filename} to {out_dir}")
-                except Exception as e:
-                    self.log_to_textbox(
-                        f"Error moving {filename} to {out_dir}: {str(e)}"
-                    )
+            if (
+                QMessageBox.question(
+                    self,
+                    "Add",
+                    "Do you want to add the results to the project?",
+                    QMessageBox.Yes | QMessageBox.No,
+                )
+                == QMessageBox.Yes
+            ):
+                for _, dest_path in result_dict.items():
+                    layer = QgsRasterLayer(dest_path, os.path.basename(dest_path))
+                    if layer.isValid():
+                        QgsProject.instance().addMapLayer(layer)
+                        self.log_to_textbox(
+                            f"Added {os.path.basename(dest_path)} to project."
+                        )
+                    else:
+                        self.log_to_textbox(
+                            f"Failed to add {os.path.basename(dest_path)} to project."
+                        )
+        except Exception as e:
+            self.log_to_textbox(f"Error saving {filename} to {out_dir}: {str(e)}")
 
     def show_error(self, error_message):
         self.log_to_textbox(f"Error: {error_message}")
