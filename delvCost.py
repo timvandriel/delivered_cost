@@ -10,6 +10,7 @@ import osmnx as ox
 import pandas
 import numpy as np
 import py3dep
+from tempfile
 
 import warnings
 
@@ -34,34 +35,6 @@ h_speed = {
     "motorway": 65,
 }
 # mtfcc_dic={'S1400':40,'S1200':56,'S1100':88}
-
-# # extraction rates of travel
-# sk_r = 2.44
-# cb_r = 3.35
-
-# # component rates
-# sk_d = 165
-# cb_d = 400
-
-# fb_d = 15
-# hf_d = 27
-# pr_d = 56
-# lt_d = 98
-# ht_d = 2470
-# pf_d = 2470
-
-# # payloads
-# sk_p = 1.25
-# cb_p = 1.04
-
-# lt_p = 12.25
-
-# # optional
-# cb_o = False
-# pbar = None
-# log = None
-
-runcnt = 1
 
 
 def get_osm_data(
@@ -190,7 +163,6 @@ def _run(
         pbar.setValue(pbar.value() + 1)
     if lyr_roads_path is None:
         rds = get_osm_data(ply, osm_rds, out_crs=s_area.crs).reset_index()
-        print(rds.columns)
     else:
         rds = open_vectors(lyr_roads_path).data.compute()
 
@@ -412,4 +384,4 @@ def maybe_log(log, msg):
     if log:
         log(msg)
     else:
-        print(msg)  # Fallback to print if no logger is provided
+        print(msg)  # Fallback to if no logger is provided

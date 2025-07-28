@@ -1,4 +1,5 @@
 from PyQt5.QtCore import QObject, pyqtSignal, QRunnable, pyqtSlot
+from PyQt5.QtWidgets import QMessageBox
 
 
 class WorkerSignals(QObject):
@@ -16,7 +17,11 @@ class DeliveredCostWorker(QRunnable):
 
     @pyqtSlot()
     def run(self):
-        from .delvCost import run
+        try:
+            from .delvCost import run
+        except ImportError as e:
+            self.signals.error.emit(f"Import Error: {str(e)}")
+            return
 
         try:
 
