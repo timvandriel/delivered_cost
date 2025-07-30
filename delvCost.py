@@ -9,8 +9,13 @@ from shapely.geometry import box, Point, Polygon
 import osmnx as ox
 import pandas
 import numpy as np
-import py3dep
-from tempfile
+
+# import py3dep
+import tempfile
+import elevation
+import rioxarray
+from qgis.core import QgsProcessingUtils
+
 
 import warnings
 
@@ -35,6 +40,7 @@ h_speed = {
     "motorway": 65,
 }
 # mtfcc_dic={'S1400':40,'S1200':56,'S1100':88}
+temp_dir = QgsProcessingUtils.tempFolder()
 
 
 def get_osm_data(
@@ -67,21 +73,76 @@ def get_osm_data(
     return out_gdf
 
 
-def get_3dep_data(sgeo, res=30, out_crs=None):
+# def get_3dep_data(sgeo, res=30, out_crs=None):
+#     """
+#     downloads 3dep data and returns a raster object
+#     """
+#     # Defensive checks
+#     from shapely.validation import explain_validity
+#     from shapely.geometry import Polygon
+
+#     if not isinstance(sgeo, Polygon):
+#         raise TypeError(f"Expected shapely Polygon, got {type(sgeo)}")
+#     if not sgeo.is_valid:
+#         raise ValueError(f"Invalid geometry: {explain_validity(sgeo)}")
+#     if sgeo.area < 1e-8:
+#         raise ValueError("Geometry too small to request DEM.")
+
+#     try:
+#         out_rs = py3dep.get_dem(sgeo, res, 4326).expand_dims({"band": 1})
+#     except Exception as e:
+#         raise RuntimeError(f"Failed to download DEM from py3dep: {e}")
+
+#     if out_crs is not None:
+#         out_rs = out_rs.rio.reproject(out_crs)
+
+#     return Raster(out_rs.chunk())
+
+
+def get_3dep_data(sgeo: Polygon, res=30, out_crs=None) -> Raster:
     """
-    downloads 3dep data from a specified service and resolution and returns a raster object
+    Downloads DEM data using the `elevation` module and returns a raster-tools Raster object.
 
-    sgeo: object, polygon bounding box used to extract data (WGS 84 - EPSG:4326)
-    res: int, spatial resolution
-    out_crs: object, optional crs used to project geopandas dataframe to a differnt crs
+    Parameters:
+    - sgeo: shapely Polygon in EPSG:4326
+    - res: ignored, elevation only supports SRTM (~30m)
+    - out_crs: optional target CRS
 
-    return: raster object
+    Returns:
+    - Raster: raster-tools lazy Raster object
     """
-    out_rs = py3dep.get_dem(sgeo, res, 4326).expand_dims({"band": 1})
-    if not out_crs is None:
-        out_rs = out_rs.rio.reproject(out_crs)
+    if not isinstance(sgeo, Polygon):
+        raise TypeError(f"Expected shapely Polygon, got {type(sgeo)}")
+    if not sgeo.is_valid:
+        raise ValueError(f"Invalid geometry: {explain_validity(sgeo)}")
+    if sgeo.area < 1e-8:
+        raise ValueError("Geometry too small to request DEM.")
 
-    return Raster(out_rs.chunk())
+    # Get bounds in EPSG:4326
+    minx, miny, maxx, maxy = sgeo.bounds
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dem_path = f"{tmpdir}/clipped_dem.tif"
+
+        # Download and clip DEM
+        elevation.clip(
+            bounds=(minx, miny, maxx, maxy), output=dem_path, product="SRTM1"
+        )
+        elevation.clean()  # remove cached data to save space
+
+        # Open with rioxarray and wrap in raster-tools
+        try:
+            da = rioxarray.open_rasterio(dem_path, masked=True).squeeze(
+                "band", drop=True
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to open clipped DEM: {e}")
+
+        # Reproject if needed
+        if out_crs is not None:
+            da = da.rio.reproject(out_crs)
+
+        return Raster(da.chunk())
 
 
 def _remove_file(path):
@@ -187,6 +248,13 @@ def _run(
     maybe_log(log, "Getting Elevation Data...")
     if pbar is not None:
         pbar.setValue(pbar.value() + 1)
+    from shapely.validation import explain_validity
+
+    print("DEBUG: Polygon validity:", ply.is_valid)
+    print("DEBUG: Polygon issue:", explain_validity(ply))
+    print("DEBUG: Polygon area:", ply.area)
+    print("DEBUG: Polygon WKT:", ply.wkt)
+
     elv = get_3dep_data(ply, 30, out_crs=s_area.crs)
 
     maybe_log(log, "Subsetting and attributing data...")
@@ -277,13 +345,13 @@ def _run(
     sc2 = cb_saw_cost * o2
     saw_cost = sc1 + sc2
     saw_cost = saw_cost.where(saw_cost >= 0, np.nan)
-    _remove_file(f"d_cost{runcnt}.tif")
-    saw_cost.save(f"d_cost{runcnt}.tif")
-    outdic[f"Delivered Cost {runcnt}"] = f"d_cost{runcnt}.tif"
+    d_cost = os.path.join(temp_dir, f"d_cost{runcnt}.tif")
+    saw_cost.save(d_cost)
+    outdic[f"Delivered Cost {runcnt}"] = d_cost
     add_tr_fr_cost = ht_cost + pf_cost
-    _remove_file(f"a_cost{runcnt}.tif")
-    add_tr_fr_cost.save(f"a_cost{runcnt}.tif")
-    outdic[f"Additional Treatment Cost {runcnt}"] = f"a_cost{runcnt}.tif"
+    a_cost = os.path.join(temp_dir, f"a_cost{runcnt}.tif")
+    add_tr_fr_cost.save(a_cost)
+    outdic[f"Additional Treatment Cost {runcnt}"] = a_cost
 
     if cb_o:
         maybe_log(
@@ -293,27 +361,31 @@ def _run(
         if pbar is not None:
             pbar.setValue(pbar.value() + 1)
 
-        _remove_file(f"skidder_cost{runcnt}.tif")
-        sk_saw_cost.save(f"skidder_cost{runcnt}.tif")
-        outdic[f"Skidder Cost {runcnt}"] = f"skidder_cost{runcnt}.tif"
+        skidder_cost = os.path.join(temp_dir, f"skidder_cost{runcnt}.tif")
+        sk_saw_cost.save(skidder_cost)
+        outdic[f"Skidder Cost {runcnt}"] = skidder_cost
 
-        _remove_file(f"cable_cost{runcnt}.tif")
-        cb_saw_cost.save(f"cable_cost{runcnt}.tif")
-        outdic[f"Cable Cost {runcnt}"] = f"cable_cost{runcnt}.tif"
+        cable_cost = os.path.join(temp_dir, f"cable_cost{runcnt}.tif")
+        cb_saw_cost.save(cable_cost)
+        outdic[f"Cable Cost {runcnt}"] = cable_cost
 
-        _remove_file(f"hand_treatment_costs{runcnt}.tif")
-        ht_cost.save(f"hand_treatment_costs{runcnt}.tif")
-        outdic[f"Hand Treatment Cost {runcnt}"] = f"hand_treatment_costs{runcnt}.tif"
-
-        _remove_file(f"prescribed_fire_costs{runcnt}.tif")
-        pf_cost.save(f"prescribed_fire_costs{runcnt}.tif")
-        outdic[f"Prescribed Fire Cost {runcnt}"] = f"prescribed_fire_costs{runcnt}.tif"
-
-        _remove_file(f"potential_harv_system{runcnt}.tif")
-        opr.save(f"potential_harv_system{runcnt}.tif")
-        outdic[f"Potential Harvesting System {runcnt}"] = (
-            f"potential_harv_system{runcnt}.tif"
+        hand_treatment_costs = os.path.join(
+            temp_dir, f"hand_treatment_costs{runcnt}.tif"
         )
+        ht_cost.save(hand_treatment_costs)
+        outdic[f"Hand Treatment Cost {runcnt}"] = hand_treatment_costs
+
+        prescribed_fire_costs = os.path.join(
+            temp_dir, f"prescribed_fire_costs{runcnt}.tif"
+        )
+        pf_cost.save(prescribed_fire_costs)
+        outdic[f"Prescribed Fire Cost {runcnt}"] = prescribed_fire_costs
+
+        potential_harv_system = os.path.join(
+            temp_dir, f"potential_harv_system{runcnt}.tif"
+        )
+        opr.save(potential_harv_system)
+        outdic[f"Potential Harvesting System {runcnt}"] = potential_harv_system
 
     if pbar is not None:
         pbar.setValue(pbar.maximum())

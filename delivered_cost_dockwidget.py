@@ -38,6 +38,11 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsGeometry,
     QgsPointXY,
+    QgsRasterShader,
+    QgsColorRampShader,
+    QgsSingleBandPseudoColorRenderer,
+    QgsRasterBandStats,
+    QgsMarkerSymbol,
 )
 from qgis.gui import QgsMapToolPan, QgsVertexMarker
 from qgis.utils import iface
@@ -45,7 +50,7 @@ from PyQt5.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
 from PyQt5.QtCore import QTimer, Qt, QThreadPool
 from .draw_polygon_tool import DrawPolygonTool
 from .pick_point_tool import PickPointTool
-from qgis.core import QgsCoordinateTransform, QgsProject, QgsPointXY, QgsGeometry
+from PyQt5.QtGui import QColor
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -333,10 +338,13 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         iface.actionPan().trigger()
 
     def activate_point_picker(self):
-        if self.facility_marker:
-            iface.mapCanvas().scene().removeItem(self.facility_marker)
-            del self.facility_marker
-            self.facility_marker = None
+        if hasattr(self, "facility_layer_id") and self.facility_layer_id:
+            layer = QgsProject.instance().mapLayer(self.facility_layer_id)
+            if layer:
+                QgsProject.instance().removeMapLayer(layer)
+            self.facility_layer_id = None
+            self.facility_coords = None
+            iface.mapCanvas().refresh()
         iface.mapCanvas().setMapTool(self.pointTool)
         iface.messageBar().pushMessage(
             "Instructions for picking a point",
@@ -346,15 +354,39 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         )
 
     def handle_point_picked(self, point):
-        self.facility_marker = QgsVertexMarker(iface.mapCanvas())
-        self.facility_marker.setCenter(point)
-        self.facility_marker.setColor(Qt.red)
-        self.facility_marker.setIconType(QgsVertexMarker.ICON_CROSS)
-        self.facility_marker.setPenWidth(2)
-        self.facility_marker.setScale(2)
-
+        project_crs = QgsProject.instance().crs()
+        geom = QgsGeometry.fromPointXY(point)
         self.facility_coords = point
-        iface.actionPan().trigger()  # Switch back to pan tool after picking point
+
+        # Create a memory point layer with the project CRS
+        facility_layer = QgsVectorLayer(
+            f"Point?crs={project_crs.authid()}", "Facility Point", "memory"
+        )
+
+        # Add the layer to the project
+        QgsProject.instance().addMapLayer(facility_layer)
+        self.facility_layer_id = facility_layer.id()  # store the layer ID if needed
+
+        # Add the point feature
+        provider = facility_layer.dataProvider()
+        feat = QgsFeature()
+        feat.setGeometry(geom)
+        provider.addFeatures([feat])
+
+        facility_layer.updateExtents()
+        # Set symbol to black dot
+        symbol = QgsMarkerSymbol.createSimple(
+            {
+                "name": "circle",  # dot shape
+                "color": "black",  # fill color
+                "size": "3",  # size in millimeters
+            }
+        )
+        facility_layer.renderer().setSymbol(symbol)
+        facility_layer.triggerRepaint()
+        iface.mapCanvas().refresh()
+
+        iface.actionPan().trigger()
 
     def select_roads_shapefile(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -376,56 +408,34 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.plainTextEdit.appendPlainText(str(message))
 
     def handle_results(self, result_dict):
-        import shutil
-        from pathlib import Path
 
         self.log_to_textbox("Delivered Cost Analysis completed successfully.")
         self.runButton.setEnabled(True)
-
-        out_dir = QFileDialog.getExistingDirectory(
-            self,
-            "Select directory to save output rasters",
-            "",
-            QFileDialog.ShowDirsOnly,
-        )
-        if not out_dir:
-            self.log_to_textbox(
-                "Save directory selection cancelled. Results not saved."
-            )
-            return
-
-        source_dir = str(Path.home())
-        print(f"Source directory: {source_dir}")
         try:
-            for key, filename in result_dict.items():
-                src_path = os.path.join(source_dir, filename)
-                dest_path = os.path.join(out_dir, filename)
-                if os.path.exists(src_path):
-                    shutil.move(src_path, dest_path)
-                    result_dict[key] = dest_path  # Update path in result_dict
-                    self.log_to_textbox(f"Moved {filename} to {out_dir}")
-            if (
-                QMessageBox.question(
-                    self,
-                    "Add",
-                    "Do you want to add the results to the project?",
-                    QMessageBox.Yes | QMessageBox.No,
+            for name, dest_path in result_dict.items():
+                layer = QgsRasterLayer(dest_path, name)
+                layer.setCustomProperty("delivered_cost_plugin/temp", True)
+
+                # Ensure the raster layer is valid
+                if not layer.isValid():
+                    raise RuntimeError("Raster layer failed to load.")
+
+                # Trigger stats computation so QGIS knows actual min/max values
+                provider = layer.dataProvider()
+                stats = provider.bandStatistics(1, QgsRasterBandStats.All)
+                min_val = stats.minimumValue
+                max_val = stats.maximumValue
+
+                # Now apply symbology AFTER stats are known
+                if "d_cost" in dest_path.lower():
+                    apply_capped_symbology(layer, cap_value=1000)
+                QgsProject.instance().addMapLayer(layer)
+            else:
+                self.log_to_textbox(
+                    f"Failed to add {os.path.basename(dest_path)} to project."
                 )
-                == QMessageBox.Yes
-            ):
-                for _, dest_path in result_dict.items():
-                    layer = QgsRasterLayer(dest_path, os.path.basename(dest_path))
-                    if layer.isValid():
-                        QgsProject.instance().addMapLayer(layer)
-                        self.log_to_textbox(
-                            f"Added {os.path.basename(dest_path)} to project."
-                        )
-                    else:
-                        self.log_to_textbox(
-                            f"Failed to add {os.path.basename(dest_path)} to project."
-                        )
         except Exception as e:
-            self.log_to_textbox(f"Error saving {filename} to {out_dir}: {str(e)}")
+            self.log_to_textbox(f"Error adding layers to project: {str(e)}")
 
     def show_error(self, error_message):
         self.log_to_textbox(f"Error: {error_message}")
@@ -525,10 +535,12 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         if hasattr(self, "draw_polygon_tool") and self.draw_polygon_tool:
             self.draw_polygon_tool.deactivate()
 
-        if self.facility_marker:
-            iface.mapCanvas().scene().removeItem(self.facility_marker)
-            del self.facility_marker
-            self.facility_marker = None
+        if hasattr(self, "facility_layer_id") and self.facility_layer_id:
+            layer = QgsProject.instance().mapLayer(self.facility_layer_id)
+            if layer:
+                QgsProject.instance().removeMapLayer(layer)
+            self.facility_layer_id = None
+            self.facility_coords = None
 
         # Switch back to pan tool explicitly
         pan_tool = QgsMapToolPan(iface.mapCanvas())
@@ -603,3 +615,43 @@ def qgs_to_coords_list_epsg4326(geom):
     else:
         # For other geometry types you might want to handle differently
         raise ValueError(f"Unsupported geometry type: {type(shapely_geom)}")
+
+
+def apply_capped_symbology(raster_layer, cap_value=1000):
+    stats = raster_layer.dataProvider().bandStatistics(1)
+    actual_min = stats.minimumValue
+    symbology_min = actual_min
+    symbology_max = cap_value
+
+    # Define color ramp
+    ramp_shader = QgsColorRampShader()
+    ramp_shader.setColorRampType(QgsColorRampShader.Interpolated)
+    ramp_shader.setColorRampItemList(
+        [
+            QgsColorRampShader.ColorRampItem(
+                symbology_min, QColor("red"), str(symbology_min)
+            ),
+            QgsColorRampShader.ColorRampItem(
+                symbology_max * 0.5, QColor("yellow"), str(symbology_max * 0.5)
+            ),
+            QgsColorRampShader.ColorRampItem(
+                symbology_max, QColor("green"), str(f">{symbology_max}")
+            ),
+        ]
+    )
+    ramp_shader.setMinimumValue(symbology_min)
+    ramp_shader.setMaximumValue(symbology_max)
+
+    # Build shader and renderer
+    shader = QgsRasterShader()
+    shader.setRasterShaderFunction(ramp_shader)
+
+    renderer = QgsSingleBandPseudoColorRenderer(raster_layer.dataProvider(), 1, shader)
+
+    # Apply renderer
+    raster_layer.setRenderer(renderer)
+
+    # Hint to QGIS to use user-defined contrast (sometimes helps retain settings)
+    raster_layer.setCustomProperty("contrastEnhancementMinMax", "User")
+
+    raster_layer.triggerRepaint()
