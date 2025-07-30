@@ -10,11 +10,13 @@ import osmnx as ox
 import pandas
 import numpy as np
 
-# import py3dep
-import tempfile
-import elevation
+import py3dep
+
+# import elevation
 import rioxarray
 from qgis.core import QgsProcessingUtils
+
+# import tempfile
 
 
 import warnings
@@ -73,44 +75,14 @@ def get_osm_data(
     return out_gdf
 
 
-# def get_3dep_data(sgeo, res=30, out_crs=None):
-#     """
-#     downloads 3dep data and returns a raster object
-#     """
-#     # Defensive checks
-#     from shapely.validation import explain_validity
-#     from shapely.geometry import Polygon
-
-#     if not isinstance(sgeo, Polygon):
-#         raise TypeError(f"Expected shapely Polygon, got {type(sgeo)}")
-#     if not sgeo.is_valid:
-#         raise ValueError(f"Invalid geometry: {explain_validity(sgeo)}")
-#     if sgeo.area < 1e-8:
-#         raise ValueError("Geometry too small to request DEM.")
-
-#     try:
-#         out_rs = py3dep.get_dem(sgeo, res, 4326).expand_dims({"band": 1})
-#     except Exception as e:
-#         raise RuntimeError(f"Failed to download DEM from py3dep: {e}")
-
-#     if out_crs is not None:
-#         out_rs = out_rs.rio.reproject(out_crs)
-
-#     return Raster(out_rs.chunk())
-
-
-def get_3dep_data(sgeo: Polygon, res=30, out_crs=None) -> Raster:
+def get_3dep_data(sgeo, res=30, out_crs=None):
     """
-    Downloads DEM data using the `elevation` module and returns a raster-tools Raster object.
-
-    Parameters:
-    - sgeo: shapely Polygon in EPSG:4326
-    - res: ignored, elevation only supports SRTM (~30m)
-    - out_crs: optional target CRS
-
-    Returns:
-    - Raster: raster-tools lazy Raster object
+    downloads 3dep data and returns a raster object
     """
+    # Defensive checks
+    from shapely.validation import explain_validity
+    from shapely.geometry import Polygon
+
     if not isinstance(sgeo, Polygon):
         raise TypeError(f"Expected shapely Polygon, got {type(sgeo)}")
     if not sgeo.is_valid:
@@ -118,31 +90,61 @@ def get_3dep_data(sgeo: Polygon, res=30, out_crs=None) -> Raster:
     if sgeo.area < 1e-8:
         raise ValueError("Geometry too small to request DEM.")
 
-    # Get bounds in EPSG:4326
-    minx, miny, maxx, maxy = sgeo.bounds
+    try:
+        out_rs = py3dep.get_dem(sgeo, res, 4326).expand_dims({"band": 1})
+    except Exception as e:
+        raise RuntimeError(f"Failed to download DEM from py3dep: {e}")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        dem_path = f"{tmpdir}/clipped_dem.tif"
+    if out_crs is not None:
+        out_rs = out_rs.rio.reproject(out_crs)
 
-        # Download and clip DEM
-        elevation.clip(
-            bounds=(minx, miny, maxx, maxy), output=dem_path, product="SRTM1"
-        )
-        elevation.clean()  # remove cached data to save space
+    return Raster(out_rs.chunk())
 
-        # Open with rioxarray and wrap in raster-tools
-        try:
-            da = rioxarray.open_rasterio(dem_path, masked=True).squeeze(
-                "band", drop=True
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to open clipped DEM: {e}")
 
-        # Reproject if needed
-        if out_crs is not None:
-            da = da.rio.reproject(out_crs)
+# def get_3dep_data(sgeo: Polygon, res=30, out_crs=None) -> Raster:
+#     """
+#     Downloads DEM data using the `elevation` module and returns a raster-tools Raster object.
 
-        return Raster(da.chunk())
+#     Parameters:
+#     - sgeo: shapely Polygon in EPSG:4326
+#     - res: ignored, elevation only supports SRTM (~30m)
+#     - out_crs: optional target CRS
+
+#     Returns:
+#     - Raster: raster-tools lazy Raster object
+#     """
+#     if not isinstance(sgeo, Polygon):
+#         raise TypeError(f"Expected shapely Polygon, got {type(sgeo)}")
+#     if not sgeo.is_valid:
+#         raise ValueError(f"Invalid geometry: {explain_validity(sgeo)}")
+#     if sgeo.area < 1e-8:
+#         raise ValueError("Geometry too small to request DEM.")
+
+#     # Get bounds in EPSG:4326
+#     minx, miny, maxx, maxy = sgeo.bounds
+
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         dem_path = f"{tmpdir}/clipped_dem.tif"
+
+#         # Download and clip DEM
+#         elevation.clip(
+#             bounds=(minx, miny, maxx, maxy), output=dem_path, product="SRTM1"
+#         )
+#         elevation.clean()  # remove cached data to save space
+
+#         # Open with rioxarray and wrap in raster-tools
+#         try:
+#             da = rioxarray.open_rasterio(dem_path, masked=True).squeeze(
+#                 "band", drop=True
+#             )
+#         except Exception as e:
+#             raise RuntimeError(f"Failed to open clipped DEM: {e}")
+
+#         # Reproject if needed
+#         if out_crs is not None:
+#             da = da.rio.reproject(out_crs)
+
+#         return Raster(da.chunk())
 
 
 def _remove_file(path):

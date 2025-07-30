@@ -212,13 +212,13 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         self.drawTool = DrawPolygonTool(iface.mapCanvas())
         self.drawTool.polygonCompleted.connect(self.handle_polygon_completed)
         self.drawPolygonButton.clicked.connect(self.activate_draw_tool)
-        self.facility_coords = None
 
         # Initialize pick point tool
         self.pointTool = PickPointTool(iface.mapCanvas())
         self.pointTool.pointPicked.connect(self.handle_point_picked)
         self.pickPointButton.clicked.connect(self.activate_point_picker)
-        self.facility_marker = None
+        self.facility_coords = []  # Store picked point coordinates
+        self.facility_layer = None
 
         # Connect shapefile selection buttons
         self.userRoadsButton.clicked.connect(self.select_roads_shapefile)
@@ -254,6 +254,10 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
     def on_layer_removed(self, layer_id):
         if getattr(self, "osm_layer_id", None) == layer_id:
             self.osm_layer_id = None
+        if self.facility_layer_id == layer_id:
+            self.facility_layer_id = None
+            self.facility_coords = []
+            self.facility_layer = None
 
     def zoom_to_us_extent_3857(self):
         # Approximate extent for continental U.S. in EPSG:3857 (Web Mercator)
@@ -338,55 +342,47 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
         iface.actionPan().trigger()
 
     def activate_point_picker(self):
-        if hasattr(self, "facility_layer_id") and self.facility_layer_id:
-            layer = QgsProject.instance().mapLayer(self.facility_layer_id)
-            if layer:
-                QgsProject.instance().removeMapLayer(layer)
-            self.facility_layer_id = None
-            self.facility_coords = None
-            iface.mapCanvas().refresh()
+        if self.facility_layer is None:
+            # Create a memory layer for facility points
+            crs = QgsProject.instance().crs()
+            self.facility_layer = QgsVectorLayer(
+                f"Point?crs={crs.authid()}", "Facilities", "memory"
+            )
+            QgsProject.instance().addMapLayer(self.facility_layer)
+            self.facility_layer_id = self.facility_layer.id()
+
+            # Apply black dot symbology
+            symbol = QgsMarkerSymbol.createSimple(
+                {
+                    "name": "circle",
+                    "color": "black",
+                    "size": "3",
+                }
+            )
+            self.facility_layer.renderer().setSymbol(symbol)
+            self.facility_layer.triggerRepaint()
+
         iface.mapCanvas().setMapTool(self.pointTool)
+
         iface.messageBar().pushMessage(
-            "Instructions for picking a point",
-            "Click on the map to pick a point. The point will be marked with a red cross. Press button again to pick a new point.",
+            "Instructions for picking multiple points",
+            "Click to add a facility location. Repeat as needed. Delete 'Facilities' layer to start over.",
             level=Qgis.Info,
-            duration=25,
+            duration=20,
         )
 
     def handle_point_picked(self, point):
-        project_crs = QgsProject.instance().crs()
+        self.facility_coords.append((point.x(), point.y()))
         geom = QgsGeometry.fromPointXY(point)
-        self.facility_coords = point
 
-        # Create a memory point layer with the project CRS
-        facility_layer = QgsVectorLayer(
-            f"Point?crs={project_crs.authid()}", "Facility Point", "memory"
-        )
-
-        # Add the layer to the project
-        QgsProject.instance().addMapLayer(facility_layer)
-        self.facility_layer_id = facility_layer.id()  # store the layer ID if needed
-
-        # Add the point feature
-        provider = facility_layer.dataProvider()
+        # Add the new point to the same memory layer
+        provider = self.facility_layer.dataProvider()
         feat = QgsFeature()
         feat.setGeometry(geom)
         provider.addFeatures([feat])
-
-        facility_layer.updateExtents()
-        # Set symbol to black dot
-        symbol = QgsMarkerSymbol.createSimple(
-            {
-                "name": "circle",  # dot shape
-                "color": "black",  # fill color
-                "size": "3",  # size in millimeters
-            }
-        )
-        facility_layer.renderer().setSymbol(symbol)
-        facility_layer.triggerRepaint()
+        self.facility_layer.updateExtents()
+        self.facility_layer.triggerRepaint()
         iface.mapCanvas().refresh()
-
-        iface.actionPan().trigger()
 
     def select_roads_shapefile(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -427,13 +423,23 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
                 max_val = stats.maximumValue
 
                 # Now apply symbology AFTER stats are known
-                if "d_cost" in dest_path.lower():
-                    apply_capped_symbology(layer, cap_value=1000)
+                if (
+                    "delivered" in name.lower()
+                    or "skidder" in name.lower()
+                    or "cable" in name.lower()
+                ):
+                    if max_val > 1000:
+                        self.log_to_textbox(
+                            f"Applying capped symbology to {name} with max value 1000"
+                        )
+                        apply_capped_symbology(layer, cap_value=1000)
+                    else:
+                        self.log_to_textbox(
+                            f"Applying uncapped symbology to {name} with max value {max_val}"
+                        )
+                        apply_capped_symbology(layer, cap_value=max_val)
+
                 QgsProject.instance().addMapLayer(layer)
-            else:
-                self.log_to_textbox(
-                    f"Failed to add {os.path.basename(dest_path)} to project."
-                )
         except Exception as e:
             self.log_to_textbox(f"Error adding layers to project: {str(e)}")
 
@@ -444,7 +450,7 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
     def run_delivered_cost(self):
         self.plainTextEdit.clear()
-        if self.facility_coords is None:
+        if not self.facility_coords:
             QMessageBox.warning(
                 self,
                 "No Facility Point",
@@ -461,7 +467,11 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
 
         study_area_coords = qgs_to_coords_list_epsg4326(self.aoi_geometry)
 
-        saw_coords = qgs_to_coords_list_epsg4326(self.facility_coords)
+        saw_coords = [
+            qgs_to_coords_list_epsg4326(QgsPointXY(pt[0], pt[1]))
+            for pt in self.facility_coords
+        ]
+
         tr_s = self.rtSpdSpinBox.value()
         cb_s = self.skylineSpdSpinBox.value()
 
@@ -540,7 +550,7 @@ class DeliveredCostDockWidget(QtWidgets.QDockWidget, FORM_CLASS):
             if layer:
                 QgsProject.instance().removeMapLayer(layer)
             self.facility_layer_id = None
-            self.facility_coords = None
+            self.facility_coords = []
 
         # Switch back to pan tool explicitly
         pan_tool = QgsMapToolPan(iface.mapCanvas())
